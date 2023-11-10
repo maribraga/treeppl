@@ -12,12 +12,12 @@ type TreeLabeled =
 
 /*-------------------- Model-specific types -------------------------*/
 
-// Biogeography types ----------------
 
-type GeoTree =
-	| Leaf{age: Real, label: Int, region: Int}
-	| Node{age: Real, label: Int, region: Int, left: GeoTree, right: GeoTree}
-	| SwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, child: GeoTree}
+// Use MsgTree type for belief propagation of biogeo
+// Update tree types for host rep
+
+
+// Biogeography types ----------------
 
 // Tree decorated with postorder messages from belief propagation from biogeo.
 // Postorder = backwards in time
@@ -25,8 +25,6 @@ type GeoMsgTree =
 	| GeoMsgLeaf{age: Real, label: Int, region: Int, out_msg: Tensor[Real][]}
 	| GeoMsgNode{age: Real, label: Int, region: Int, left: GeoMsgTree, right: GeoMsgTree,
            left_in_msg: Tensor[Real][], right_in_msg: Tensor[Real][], out_msg: Tensor[Real][]}
-	| GeoMsgSwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, child: GeoMsgTree,
-										in_msg: Tensor[Real][], out_msg: Tensor[Real][]}
 
 // Tree decorated with final probabilities from belief propagation,
 // tuned so that they are useful for proposals.
@@ -34,9 +32,17 @@ type GeoProbsTree =
 	| GeoProbsLeaf{age: Real, label: Int, probs: Tensor[Real][]}
 	| GeoProbsNode{age: Real, label: Int, probs: Tensor[Real][],
              left: GeoProbsTree, right: GeoProbsTree}
-	| GeoProbsSwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, 
-											 child: GeoProbsTree, probs: Tensor[Real][]} 
 
+// Tree with simulated biogeography history 
+type GeoTree =
+	| GeoLeaf{age: Real, label: Int, region: Int}
+	| GeoNode{age: Real, label: Int, region: Int, left: GeoTree, right: GeoTree}
+	| GeoSwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, child: GeoTree}
+
+type GeoTreeDebt = GeoTreeDebt{log_debt: Real, geo_tree: GeoTree}
+
+GeoHistoryNode{age = tree.age, label = tree.label, region = region,
+	geo_history = geo_history, left = left, right = right};
 
 // Host repertoire types ---------------
 
@@ -46,6 +52,8 @@ type MsgTree =
 	| MsgLeaf{age: Real, label: Int, out_msg: Tensor[Real][]}
 	| MsgNode{age: Real, label: Int, left: MsgTree, right: MsgTree,
            left_in_msg: Tensor[Real][], right_in_msg: Tensor[Real][], out_msg: Tensor[Real][]}
+	| MsgSwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, child: MsgTree,
+									in_msg: Tensor[Real][], out_msg: Tensor[Real][]}
 
 // Tree decorated with final probabilities from belief propagation,
 // tuned so that they are useful for proposals.
@@ -53,6 +61,8 @@ type ProbsTree =
 	| ProbsLeaf{age: Real, label: Int, probs: Tensor[Real][]}
 	| ProbsNode{age: Real, label: Int, probs: Tensor[Real][],
              left: ProbsTree, right: ProbsTree}
+	| ProbsSwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, 
+										child: GeoProbsTree, probs: Tensor[Real][]} 
 
 // Event type used to store information about one host-repertoire change
 // We keep the from_state here just in case we want to use it for debugging
@@ -82,3 +92,167 @@ type ModelParams =
 //type ReturnType = ReturnType{tree: HistoryTree, lambda: Real[], mu: Real, beta: Real}
 type ReturnType = ReturnType{tree: GeoTree}
 
+
+model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, nregions: Int, interactions: Int[],
+	symbiont_geo: Int[], host_geo: Int[], host_distances: Real[], dMean: Real, tune: Real): () {
+
+	// Set prior for dispersal parameter
+	assume gamma ~ Exponential(10.0);
+
+	// Set dispersal matrix for n regions
+	// build a matrix of arbitrary size so that all off-diagonal elements = gamma,
+	// and diagonal = - gamma * (nregions - 1)  TODO for loop?
+  let g_matrix = mtxCreate(2,2,[-gamma, gamma, gamma, -gamma]);
+	printMtx(g_matrix);
+
+	let sym_geo_matrix = mtxCreate(ntips, nregions, sint2real(symbiont_geo));
+	printMtx(sym_geo_matrix);
+
+  // Derive params for ancestral biogeography proposal
+	let geo_stationary_probs = 1.0/nregions;
+  let geo_probs_tree = get_geo_proposal_params(symbiont_tree, sym_geo_matrix, g_matrix, geo_stationary_probs, tune);
+	
+	assume geo_root ~ Categorical( treal2sreal(geo_probs_tree.probs) );
+	
+  let left = simulate_geo(geo_probs_tree.left, GeoHistoryPoint{age = geo_probs_tree.age, region = geo_root}, g_matrix, sym_geo_matrix);
+  let right = simulate_geo(geo_probs_tree.right, GeoHistoryPoint{age = geo_probs_tree.age, region = geo_root}, g_matrix, sym_geo_matrix);
+
+
+
+}
+
+
+// ----- Proposal of symbiont biogeographic history ----- //
+
+// Get proposal probabilities for biogeo history
+function get_geo_proposal_params(symbiont_tree: TreeLabeled, sym_geo_matrix: Tensor[Real], g_matrix: Tensor[Real], 
+  geo_stationary_probs: Tensor[Real], tune: Real): GeoProbsTree {
+
+  let geo_msg_tree = geo_postorder_msgs(symbiont_tree, sym_geo_matrix, g_matrix);  
+  //let n = length(getMsgTreeMsg(msgTree));
+  let n = length(geo_msg_tree.out_msg);
+	let pis = rep(n, geo_stationary_probs);
+  return geo_final_probs(geo_msg_tree, pis, g_matrix, tune);
+
+}
+
+// Compute postorder biogeo messages on the observed tree
+function geo_postorder_msgs(tree: TreeLabeled, sym_geo_matrix: Tensor[Real], g_matrix: Tensor[Real]) : MsgTree {
+
+  if tree is Leaf {
+    return MsgLeaf{age = 0.0, label = tree.label, out_msg = geoMessage(mtxGetRow(tree.label, sym_geo_matrix))};
+  }
+
+  let left  = geo_postorder_msgs(tree.left , sym_geo_matrix, g_matrix);
+  let right = geo_postorder_msgs(tree.right, sym_geo_matrix, g_matrix);
+
+  let tMatrixLeft = mtxTrans(mtxExp(mtxSclrMul(tree.age-left.age, g_matrix)));   
+  let tMatrixRight = mtxTrans(mtxExp(mtxSclrMul(tree.age-right.age, g_matrix)));
+
+  let left_in_msg  = sapply1(left.out_msg, mtxMul, tMatrixLeft);  // make sure that the out_msg is a sequence with only one element TODO
+  let right_in_msg = sapply1(right.out_msg, mtxMul, tMatrixRight);
+
+  let out_msg = normalizeMessage(mulMessage(left_in_msg, right_in_msg));
+
+  return MsgNode{age= tree.age, label= tree.label, left= left, right= right, 
+    left_in_msg = left_in_msg, right_in_msg = right_in_msg, out_msg = out_msg};
+
+}
+
+// Start from a row vector of 0s, of length = nregions.
+// Loop over regions. For each region, fill in 1 for the region where
+// the tip occurs
+// output will be a row vector
+function geoMessage(): {}
+
+
+// Compute final probabilities from geo belief propagation on the observed symbiont tree
+function geo_final_probs(tree: MsgTree, parent_msg: Tensor[Real][], g_matrix: Tensor[Real], tune: Real) : ProbsTree {
+    
+  let probs = normalizeMessage(
+		messageElementPower(mulMessage(tree.out_msg, parent_msg), tune)
+  );
+
+  if tree is MsgLeaf {
+    return ProbsLeaf{age= 0.0, label= tree.label, probs = probs};
+  } 
+
+  let left_branch = tree.age - getMsgTreeAge(tree.left);
+  let right_branch = tree.age - getMsgTreeAge(tree.right);
+
+  let tMatrixLeft = mtxExp(mtxSclrMul(left_branch, g_matrix));
+  let tMatrixRight = mtxExp(mtxSclrMul(right_branch, g_matrix));
+
+  let left_parent_msg  = sapply1(mulMessage(parent_msg,tree.left_in_msg), mtxMul, tMatrixLeft);
+  let right_parent_msg = sapply1(mulMessage(parent_msg,tree.right_in_msg), mtxMul, tMatrixRight);
+
+  let left  =  final_probs(tree.left,  left_parent_msg, g_matrix, tune);
+  let right =  final_probs(tree.right, right_parent_msg, g_matrix, tune);
+
+  return ProbsNode{age = tree.age, label = tree.label, left = left, right = right, probs = probs};
+}
+
+
+// Convert a Tensor[] to [Real]
+function treal2sreal(): {}
+
+
+function getWaitingTime(from_state: Int, end_state: Int, rate: Real, from_age: Real, end_age: Real): Real {
+	if (!eqi(from_state,end_state)) {
+		return sample_exponential_max_t(rate, from_age - end_age);
+	} else {
+		assume t ~ Exponential(rate);
+    return t;
+	}
+}
+
+
+// ------ Simulate biogeographic history ------------ //
+
+function simulate_geo(tree: GeoProbsTree, start: GeoHistoryPoint, g_matrix: Tensor[Real], sym_geo_matrix: Tensor[Real]): GeoTree {
+
+	assume region ~ Categorical( treal2sreal(tree.probs) );
+
+	let stop = GeoHistoryPoint{age = tree.age, region = region};
+	
+	let left = simulate_geo(tree.left, stop, g_matrix, sym_geo_matrix);
+	let right = simulate_geo(tree.right, stop, g_matrix, sym_geo_matrix);
+
+	if tree is GeoProbsLeaf {
+		
+		return {debt = 0.0, geo_tree = GeoTreeLeaf{age = tree.age, label = tree.label, region = region}};
+	}
+
+	return simulate_geo_history(start, stop, GeoTreeNode{age=tree.age, region=region, left=left.geo_tree, right=right.geo_tree}, g_matrix);
+}
+
+
+function simulate_geo_history(from_point: GeoHistoryPoint, end_point: GeoHistoryPoint, end_debt_node: GeoTreeDebt, g_matrix: Tensor[Real]): GeoTreeDebt {
+
+	let from_state = from_point.region;
+	let end_state = end_point.region;
+	let from_age = from_point.age;
+	let end_age = end_point.age;
+
+	let rate = -(mtxGet(from_point.region, from_point.region, qMatrix));
+
+  if (rate * (from_point.age - end_point.age) < 1E-15 && !eqi(from_point.region, end_point.region)) {
+    weight 0.0;
+    resample;
+  }
+
+	let t = getWaitingTime(from_point.region, end_point.region, rate, from_point.age, end_point.age);
+	let new_age = from_point.age - t;
+
+	if (new_age < end_age) {
+		let log_wait_debt = poissonLogScore(0, PoissonParam{rate = rate*(from_age - end_age)});
+		return GeoTreeDebt{log_debt = log_wait_debt + end_debt_node.log_debt, geo_tree = end_debt_node.geo_tree}
+	}
+
+	// Case when a dispersal event occurs
+	// Create GeoSwitchNode 
+
+
+
+
+}
