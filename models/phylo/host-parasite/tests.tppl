@@ -1,0 +1,34 @@
+
+model function mymodel(): () {
+
+	let ntips = 6;
+	let symbiont_geo = [1,2,1,1,1,2];
+	let sym_geo_matrix = mtxCreate(ntips, 1, sint2real(symbiont_geo));
+	printMtx(sym_geo_matrix);
+
+	let nregions = 2;
+
+	let empty_row = mtxCreate(1,nregions, rep(nregions, 0.0));
+	printMtx(empty_row);
+
+	let messages = sapply(symbiont_geo, make_geo_message);
+	let message = messages[1];
+	printMtx(message[1]);
+
+	printLn(int2string(dim(message[1])[2]));
+
+
+}
+
+// TODO do this properly
+function make_geo_message(elem: Int): Tensor[Real][] {
+	if (eqi(elem, 1)) {
+		return [rvecCreate( 2, [1.0, 0.0] )];
+	} else {
+			if (eqi(elem, 2)) {
+				return [rvecCreate( 2, [0.0, 1.0] )];
+		} else {
+				return [rvecCreate( 2, [1.0, 1.0] )];
+		}
+	}
+}
