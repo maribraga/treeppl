@@ -33,18 +33,21 @@ type GeoProbsTree =
 	| GeoProbsNode{age: Real, label: Int, left: GeoProbsTree, right: GeoProbsTree, 
 								 probs: Tensor[Real][]}
 
-// Tree with simulated biogeography history 
-type GeoTree =
-	| GeoLeaf{age: Real, label: Int, region: Int}
-	| GeoNode{age: Real, label: Int, region: Int, left: GeoTree, right: GeoTree}
-	| GeoSwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, child: GeoTree}
-
-type GeoTreeDebt = GeoTreeDebt{log_debt: Real, geo_tree: GeoTree}
-
 // History point type used to store geo distribution snapshots at the 
 // start ages, which is the time of the dispersal event to that region
 type GeoHistoryPoint = GeoHistoryPoint{age: Real, region: Int}
 
+// Tree with simulated biogeography history 
+type GeoHistoryTree =
+	| GeoHistoryLeaf{age: Real, label: Int, region: Int, geo_history: GeoHistoryPoint[], log_geo_debt: Real}
+	| GeoHistoryNode{age: Real, label: Int, region: Int, left: GeoHistoryTree, right: GeoHistoryTree, 
+						geo_history: GeoHistoryPoint[], log_geo_debt: Real}
+	| GeoHistorySwitchNode{age: Real, index: Int, from_region: Int, to_region: Int, child: GeoHistoryTree,
+									geo_history: GeoHistoryPoint[], log_geo_debt: Real}
+
+// GeoHistoryScore type used to store a vector of history points and a log
+// score associated with this biogeographic history.
+type GeoHistoryScore = GeoHistoryScore{geo_log_score: Real, geo_history: GeoHistoryPoint[]}
 
 // Host repertoire types ---------------
 
@@ -212,24 +215,26 @@ function geo_final_probs(tree: GeoMsgTree, parent_msg: Tensor[Real][], g_matrix:
 
 // ------ Simulate biogeographic history ------------ //
 
-function simulate_geo(tree: GeoProbsTree, start: GeoHistoryPoint, g_matrix: Tensor[Real], sym_geo_matrix: Tensor[Real]): GeoTreeDebt {
+function simulate_geo(tree: GeoProbsTree, start: GeoHistoryPoint, g_matrix: Tensor[Real], sym_geo_matrix: Tensor[Real]): GeoHistoryTree {
 
 	assume region ~ Categorical( rvec2seq(tree.probs[1]) );
-
-	let stop = GeoHistoryPoint{age = tree.age, region = region};
 	
+	let stop = GeoHistoryPoint{age = tree.age, region = region};
+
+	if tree is GeoProbsLeaf {
+		return geo_history = simulate_geo_history(start, stop, g_matrix);
+	}
+
+
+
 	let left = simulate_geo(tree.left, stop, g_matrix, sym_geo_matrix);
 	let right = simulate_geo(tree.right, stop, g_matrix, sym_geo_matrix);
 
-	if tree is GeoProbsLeaf {
-		return GeoTreeDebt{log_debt = 0.0, geo_tree = GeoTreeLeaf{age = tree.age, label = tree.label, region = region}};
-	}
-
-	return simulate_geo_history(start, stop, GeoTreeNode{age=tree.age, region=region, left=left.geo_tree, right=right.geo_tree}, g_matrix);
+	return 
 }
 
 
-function simulate_geo_history(from_point: GeoHistoryPoint, end_point: GeoHistoryPoint, end_debt_node: GeoTreeDebt, g_matrix: Tensor[Real]): GeoTreeDebt {
+function simulate_geo_history(from_point: GeoHistoryPoint, end_point: GeoHistoryPoint, end_debt_node: GeoTree, g_matrix: Tensor[Real]): GeoHistoryScore {
 
 	let from_state = from_point.region;
 	let end_state = end_point.region;
@@ -248,11 +253,11 @@ function simulate_geo_history(from_point: GeoHistoryPoint, end_point: GeoHistory
 
 	if (new_age < end_age) {
 		let log_wait_debt = poissonLogScore(0, PoissonParam{rate = rate*(from_age - end_age)});
-		return GeoTreeDebt{log_debt = log_wait_debt + end_debt_node.log_debt, geo_tree = end_debt_node.geo_tree};
+		return GeoHistoryScore{geo_log_score = log_wait_debt + end_debt_node.log_debt, geo_tree = end_debt_node.geo_tree};
 	}
 
 	printLn("do something");
-	return GeoTreeDebt{log_debt = end_debt_node.log_debt, geo_tree = end_debt_node.geo_tree};
+	return GeoHistoryScore{geo_log_score = end_debt_node.log_debt, geo_tree = end_debt_node.geo_tree};
 	// Case when a dispersal event occurs
 	// Create GeoSwitchNode
 	
