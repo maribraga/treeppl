@@ -30,14 +30,18 @@ type ModelParams =
 type MsgTree =
  | MsgLeaf{age: Real, label: Int, out_msg: Tensor[Real][]}
  | MsgNode{age: Real, label: Int, left: MsgTree, right: MsgTree,
-           left_in_msg: Tensor[Real][], right_in_msg: Tensor[Real][], out_msg: Tensor[Real][]}
+           left_in_msg: Tensor[Real][], right_in_msg: Tensor[Real][], out_msg: Tensor[Real][],
+           log_norm_factor: Real}
+
+// Type for normalized message vector with the log of the accumulated normalizing factor
+type NormMessageWithFactor = NormMessageWithFactor{msg: Tensor[Real][], log_factor: Real}
 
 // Tree decorated with final probabilities from belief propagation,
 // tuned so that they are useful for proposals.
 type ProbsTree =
- | ProbsLeaf{age: Real, label: Int, probs: Tensor[Real][]}
+ | ProbsLeaf{age: Real, label: Int, probs: Tensor[Real][], log_norm_factor: Real}
  | ProbsNode{age: Real, label: Int, probs: Tensor[Real][],
-             left: ProbsTree, right: ProbsTree}
+             left: ProbsTree, right: ProbsTree, log_norm_factor: Real}
 
 // Event type used to store information about one host-repertoire change
 // We keep the from_state here just in case we want to use it for debugging
@@ -56,8 +60,8 @@ type HistoryWeight = HistoryWeight{log_weight: Real, history: HistoryPoint[]}
 
 // Tree decorated with ancestral host repertoires and branch repertoire histories
 type HistoryTree =
-  | HistoryLeaf{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[], log_rep_debt: Real}
-  | HistoryNode{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[], log_rep_debt: Real,
+  | HistoryLeaf{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[]}
+  | HistoryNode{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[],
                 left: HistoryTree, right: HistoryTree}
 
 // Type used to hold the character histories and parameter values to be outputed
@@ -128,7 +132,7 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
 
   // calculate the sum of weights of the sampled root states
   let log_root_rep_debt = seqSumReal(zipWith(categoricalLogScore, root_rep, probRecordSequence));
-	// Note: categorical works here because root_rep is 0-based
+  // Note: categorical works here because root_rep is 0-based
  
   // calculate -log of the number of possible root states
   let log_weight_root = - ( log( (3.0 ^ Real(nhosts)) - (2.0 ^ Real(nhosts)) ) );
@@ -139,14 +143,12 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
 
   // Root node doesn't have any history (no subroot branch)
   let historyTree = HistoryNode{age = probs_tree.age, label = probs_tree.label,
-    repertoire = root_rep, history = [], log_rep_debt = log_root_rep_debt-log_weight_root,
-    left = left, right = right};
+                                repertoire = root_rep, history = [],
+                                left = left, right = right};
 
-  // Factor in the net debt of the proposed ancestral repertoires 
-  // at nodes and leaves in the historyTree
-  // Mariana: I'm not sure if this should be minus
-  logWeight( -get_rep_debt(historyTree) );
-  
+  // Correct for the root weight and proposals
+  logWeight (log_weight_root - log_root_debt - probs_tree.log_norm_factor);
+
   // Return symbiont tree with simulated character history and parameter values
   return ReturnType{tree = historyTree, lambda = lambda, mu = mu, beta = beta};
 } 
@@ -181,12 +183,13 @@ function get_proposal_params(symbiont_tree: TreeLabeled, iMatrix: Tensor[Real], 
 
   // postorder message passing
   let msgTree = postorder_msgs(symbiont_tree, iMatrix, qMatrix);
+
   // root state probabilities given sampled lambdas and independence model  
   let n = length(getMsgTreeMsg(msgTree));  // getMsgTreeMsg is a bug workaround
   let pis = rep(n, stationary_probs);
+
   // calculate final probabilites from belief propagation
   return final_probs(msgTree, pis, qMatrix, tune);
-
 }
 
 // Compute postorder messages on the observed tree
@@ -210,12 +213,11 @@ function postorder_msgs(tree: TreeLabeled, iMatrix: Tensor[Real], qMatrix: Tenso
   let left_in_msg  = sapply1(left.out_msg, mtxMul, tMatrixLeft);
   let right_in_msg = sapply1(right.out_msg, mtxMul, tMatrixRight);
 
-  // multiply children in messages and then normalise final out message 
-  let out_msg = normalizeMessage(mulMessage(left_in_msg, right_in_msg));
+  // multiply children in messages and then normalise final out message
+  let msg_factor = norm_mess(mulMessage(left_in_msg, right_in_msg));
 
   return MsgNode{age= tree.age, label= tree.label, left= left, right= right, 
-    left_in_msg = left_in_msg, right_in_msg = right_in_msg, out_msg = out_msg};
-
+    left_in_msg = left_in_msg, right_in_msg = right_in_msg, out_msg = msg_factor.msg, log_norm_factor = msg_factor.log_factor};
 }
 
 // Compute leaf message from observed interactions
@@ -249,12 +251,11 @@ function makeStateMessage(interaction: Real): Tensor[Real] {
 function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[Real], tune: Real) : ProbsTree {
   
   // start from the root, where the parent message is the stationary distribution
-  let probs = normalizeMessage(
-		messageElementPower(mulMessage(tree.out_msg, parent_msg), tune)
-  );
+  let raw_probs = normalizeMessage(mulMessage(tree.out_msg, parent_msg));
+  let msg_factor = norm_mess(messageElementPower(raw_probs, tune));
 
   if tree is MsgLeaf {
-    return ProbsLeaf{age= 0.0, label= tree.label, probs = probs};
+    return ProbsLeaf{age= 0.0, label= tree.label, probs = msg_factor.msg, log_norm_factor = msg_factor.log_factor};
   } 
 
   // get branch lengths
@@ -266,15 +267,14 @@ function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[
   let tMatrixRight = mtxExp(mtxSclrMul(right_branch, qMatrix));
 
   // get parent message to each child
-  // TO DO: check that it is really parent_msg and not probs here
-  let left_parent_msg  = sapply1(mulMessage(parent_msg, tree.left_in_msg), mtxMul, tMatrixLeft);
-  let right_parent_msg = sapply1(mulMessage(parent_msg, tree.right_in_msg), mtxMul, tMatrixRight);
+  let left_parent_msg  = sapply1(mulMessage(parent_msg, tree.right_in_msg), mtxMul, tMatrixLeft);
+  let right_parent_msg = sapply1(mulMessage(parent_msg, tree.left_in_msg), mtxMul, tMatrixRight);
 
   // continue up the tree (root -> leafs)
   let left  =  final_probs(tree.left,  left_parent_msg, qMatrix, tune);
   let right =  final_probs(tree.right, right_parent_msg, qMatrix, tune);
 
-  return ProbsNode{age = tree.age, label = tree.label, left = left, right = right, probs = probs};
+  return ProbsNode{age = tree.age, label = tree.label, left = left, right = right, probs = msg_factor.msg, log_norm_factor = msg_factor.log_factor + tree.log_norm_factor};
 }
 
 
@@ -290,8 +290,8 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
   let probRecordSequence = sapply(tree.probs, createProbRecord);
   let repertoire = sapply(probRecordSequence, categorical);      // Note: assume is within function categorical
     
-  let log_rep_debt = seqSumReal(zipWith(categoricalLogScore, repertoire, probRecordSequence)); 
-	// Note: categorical works here because repertoire id 0-based
+  let log_rep_debt = seqSumReal(zipWith(categoricalLogScore, repertoire, probRecordSequence)) - tree.log_norm_factor);
+  // Note: categorical works here because repertoire is 0-based
   	
   // check if sampled repertoire contains at least one actual host (state 2)
   let valid_rep = any(is2, repertoire);  
@@ -302,30 +302,30 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
     resample;
   } 
 
-	let stop = HistoryPoint{age = getProbsTreeAge(tree), repertoire = repertoire};
+  let stop = HistoryPoint{age = getProbsTreeAge(tree), repertoire = repertoire};
   // simulate a character history from parent (start) to current node/leaf (stop)
-	let history = simulate_history(start, stop, mp);
-  
-	if tree is ProbsLeaf {
+  let history = simulate_history(start, stop, mp);
+  logWeight (log_rep_debt);
+  resample;  
+
+  if tree is ProbsLeaf {
 
     // calculate weight of proposed repertoire given observation messages
-    // this weight won't be repayed 
-		let obs_msg = observationMessage(mtxGetRow(tree.label, iMatrix)); 
-		let obsRecordSequence = sapply(obs_msg, createProbRecord);
-		let log_weight = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
-		// Note: categorical works here because repertoire id 0-based
+    let obs_msg = observationMessage(mtxGetRow(tree.label, iMatrix)); 
+    let obsRecordSequence = sapply(obs_msg, createProbRecord);
+    let log_weight = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
+    // Note: categorical works here because repertoire id 0-based
 		
-		return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
-		                   history = history, log_rep_debt = log_rep_debt - log_weight};
-	}
+    return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
+                       history = history, log_rep_debt = log_rep_debt - log_weight};
+  }
 
   // simulate up the tree (root -> leaf)
-	let left = simulate(tree.left, stop, mp, iMatrix);
-	let right = simulate(tree.right, stop, mp, iMatrix);
+  let left = simulate(tree.left, stop, mp, iMatrix);
+  let right = simulate(tree.right, stop, mp, iMatrix);
 
-	return HistoryNode{age = tree.age, label = tree.label, repertoire = repertoire,
-    history = history, log_rep_debt = log_rep_debt, left = left, right = right};
-
+  return HistoryNode{age = tree.age, label = tree.label, repertoire = repertoire,
+                     history = history, left = left, right = right};
 }
 
 
@@ -336,13 +336,16 @@ function simulate_history (from_rep: HistoryPoint, to_rep: HistoryPoint, mp: Mod
 
   // propose events one host at a time
   let proposed_unordered_events = propose_events(1, from_rep, to_rep, mp.qMatrix);
+
   // order events by decreasing age
-	let eventSeq = qSort(subAge, proposed_unordered_events.events);
+  let eventSeq = qSort(subAge, proposed_unordered_events.events);
+  
   // Simulate repertoire evolution from full model, one event at a time
   let history_weight = simulate_by_event(from_rep.repertoire, eventSeq, 1, from_rep.age, to_rep.age, mp);
 	
-  // Now we have both debt and weight at an alignment point 
+  // Now we have both unnormalized debt and weight at an alignment point 
   logWeight(history_weight.log_weight - proposed_unordered_events.log_debt); 
+  resample; // To trigger resampling here when resampling is manual
 
   // return only history since weight has already been updated
   return history_weight.history;
@@ -693,7 +696,24 @@ function is2(x: Int): Bool {
 function is1or2(x: Int): Bool {
   if (eqi(x,1) || eqi(x,2)) { 
     return true;
-  } else {
-			return false;
-	}
+  }
+  return false;
 }
+
+// Get factor for each host (the multiplicator needed to normalize the message)
+function get_factor(msg: Tensor[Real]): Real {
+  let factor = mtxGet(1, 1, msg) + mtxGet(1, 2, msg) + mtxGet(1, 3, msg);
+  return 1.0/factor;
+}  
+    
+// Normalise message for each host and store the log of the normalizing factors
+function norm_mess(msg: Tensor[Real][]): FactorNormMessage {
+  let factors = sapply(msg, get_factor);
+
+  let log_factor = -seqSumReal(sapply(factors, log));   
+
+  let norm_msg = zipWith(mtxSclrMul, factors, msg);
+
+  return NormMessageWithFactor{msg = norm_msg, log_factor = log_factor};
+}
+
