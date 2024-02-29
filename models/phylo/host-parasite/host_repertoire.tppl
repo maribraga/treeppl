@@ -441,11 +441,9 @@ function getWaitingTime(from_state: Int, end_state: Int, rate: Real, from_age: R
 
 // Which state changes are possible for each state?
 function getToStates(state: Int): Int[] { 
-  if (eqi(state, 0))
-    return [1,2];
+  if (eqi(state, 0)) {return [1,2];}
 
-  if (eqi(state, 1))
-    return [0,2];
+  if (eqi(state, 1)) {return [0,2];}
 
   // if (eqi(state,2))
   return [0,1];
@@ -589,18 +587,18 @@ function getLoss2 (n2s: Real, mp: ModelParams): Real {
 
 // Compute the sum of gain rates for a repertoire
 function gainsIf0or1 (i: Int, from_state: Int, repertoire: Int[], mp: ModelParams): Real {
-  if (eqi(from_state, 0) || eqi(from_state, 1))
+  if (eqi(from_state, 0) || eqi(from_state, 1)) {
     return getRate(repertoire, i, addi(from_state,1), mp);
-
+  }
   return 0.0;
 }
 
 // Accumulate the total log debt of proposing the
 // ancestral repertoires in the tree.
 function get_rep_debt (tree: HistoryTree): Real {
-  if (tree is HistoryLeaf)
+  if (tree is HistoryLeaf) {
     return tree.log_rep_debt;
-
+  }
   return tree.log_rep_debt + get_rep_debt(tree.left) + get_rep_debt(tree.right);
 }
 
