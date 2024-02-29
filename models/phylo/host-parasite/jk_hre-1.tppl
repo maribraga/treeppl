@@ -1,0 +1,153 @@
+type ModelAttrs = ModelAttrs {lambda: Real[], mu: Real, beta: Real, distances: Real[][], avgDistance: Real}
+
+type TreeLabeled =
+    | Leaf {age: Real, label: Int}
+    | Node {age: Real, left: TreeLabeled, right: TreeLabeled, label: Int}
+
+type SimulationEvent =
+    | ChangeEvent {age: Real, host: Int, fromState: Int, toState: Int, proposalWeight: Real}
+    | EndEvent {age: Real}
+    | StartEvent {age: Real, proposalWeight: Real, fromState: Int}
+
+function updateElementHelper(i: Int, e: Int, ni: Int, ne: Int) {
+    if eqi(i, ni) {
+        return ne;
+    }
+    return e;
+}
+
+function updateElement(seq: Int[], ni: Int, ne: Int) {
+    return sapplyi2(seq, updateElementHelper, ni, ne);
+}
+
+function includes(seq: Int[], v: Int) {
+    for e in seq {
+        if eqi(e, v) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function avgDistanceHelper(distances: Real[], repertoire: Int[], level: Int, host: Int, sum: Real, count: Real) {
+    if eqi(host, 0) {
+        return sum / count;
+    }
+    if geqi(repertoire[host], level) {
+        return avgDistanceHelper(distances, repertoire, level, subi(host, 1), sum + distances[host], count + 1.0);
+    }
+    return avgDistanceHelper(distances, repertoire, level, subi(host, 1), sum, count);
+}
+
+function avgDistance(distances: Real[], repertoire: Int[], level: Int) {
+    return avgDistanceHelper(distances, repertoire, level, length(repertoire), 0.0, 0.0);
+}
+
+function rates(repertoire:Int[], host: Int, attrs: ModelAttrs) {
+    let fromState = repertoire[host];
+    if eqi(fromState, 0) {
+        let eta = exp(-attrs.beta * avgDistance(attrs.distances[host], repertoire, 1) / attrs.avgDistance);
+        return [0., attrs.lambda[1] * attrs.mu * eta, 0.];
+    }
+    if eqi(fromState, 1) {
+        let eta = exp(-attrs.beta * avgDistance(attrs.distances[host], repertoire, 2) / attrs.avgDistance);
+        return [attrs.lambda[2] * attrs.mu, 0., attrs.lambda[3] * attrs.mu * eta];
+    }
+    return [0., attrs.lambda[4] * attrs.mu, 0.];
+}
+
+function proposalRates(toState: Int, attrs: ModelAttrs) {
+    if eqi(toState, 0) {
+        let eta = exp(-attrs.beta);
+        return [0., attrs.lambda[1] * attrs.mu * eta, 0.];
+    }
+    if eqi(toState, 1) {
+        let eta = exp(-attrs.beta);
+        return [attrs.lambda[2] * attrs.mu, 0., attrs.lambda[3] * attrs.mu * eta];
+    }
+    return [0., attrs.lambda[4] * attrs.mu, 0.];
+}
+
+function cmpAge(a: SimulationEvent, b: SimulationEvent) {
+    if a.age < b.age { return 1; }
+    if a.age > b.age { return subi(0, 1); }  // return -1 does not work
+    return 0;
+}
+
+function updateWeight(index: Int, repertoire: Int[], events: SimulationEvent[], attrs: ModelAttrs) {
+    if !includes(repertoire, 2) {
+        weight 0.0;
+        resample;
+        return;
+    }
+    let event = events[index];
+    if event is StartEvent {
+        logWeight -event.proposalWeight;
+        return updateWeight(addi(index, 1), repertoire, events, attrs);
+    }
+    for host in 1 to (length(repertoire)) {
+        let rates = rates(repertoire, host, attrs);
+        let rate = seqSumReal(rates);
+        logWeight -rate * (events[subi(index, 1)].age - event.age);
+        if event is ChangeEvent {
+            if eqi(event.host, host) {
+                logWeight log(rates[addi(event.toState, 1)]);
+            }
+        }
+    }
+    if event is EndEvent { return; }
+    logWeight -event.proposalWeight;
+    return updateWeight(addi(index, 1), updateElement(repertoire, event.host, event.toState), events, attrs);
+}
+
+function simulate(host: Int, state: Int, parentAge: Real, age: Real, events: SimulationEvent[], attrs: ModelAttrs) {
+    let rates = proposalRates(state, attrs);
+    let rate = seqSumReal(rates);
+    assume t ~ Exponential(rate);
+    if t >= parentAge - age {
+        return join([events, [StartEvent {age = parentAge, fromState = state, proposalWeight = -rate * (parentAge - age)}]]);
+    }
+    let p = seqNormalize(rates);
+    assume fromState ~ Categorical(p);  // Categorical's support starts from 0
+    return simulate(
+        host, fromState, parentAge, age + t,
+        join([events, [ChangeEvent {age = age + t, host = host, fromState = fromState, toState = state, proposalWeight = -rate * t + log(rates[addi(fromState, 1)])}]]),
+        attrs
+    );
+}
+
+function simulateEvents(host: Int, attrs: ModelAttrs, parentAge: Real, repertoireLeft: Int[], eventsLeft: SimulationEvent[], repertoireRight: Int[], eventsRight: SimulationEvent[], repertoire: Int[]) {
+    if eqi(host, 0) {
+        updateWeight(1, repertoire, qSort(cmpAge, eventsLeft), attrs);
+        updateWeight(1, repertoire, qSort(cmpAge, eventsRight), attrs);
+        resample;
+        return repertoire;
+    }
+    let eventsLeft = simulate(host, repertoireLeft[host], parentAge, eventsLeft[1].age, eventsLeft, attrs);
+    let eventsRight = simulate(host, repertoireRight[host], parentAge, eventsRight[1].age, eventsRight, attrs);
+    if neqi(eventsLeft[length(eventsLeft)].fromState, eventsRight[length(eventsRight)].fromState) { weight 0.0; }
+    resample;
+    return simulateEvents(
+        subi(host, 1), attrs, parentAge,
+        repertoireLeft, eventsLeft,
+        repertoireRight, eventsRight,
+        join([[eventsLeft[length(eventsLeft)].fromState], repertoire])
+    );
+}
+
+function walk(tree: TreeLabeled, nhosts: Int, interactions: Int[][], attrs: ModelAttrs) {
+    if tree is Leaf { return interactions[tree.label]; }
+    let repertoireLeft = walk(tree.left, nhosts, interactions, attrs);
+    let repertoireRight = walk(tree.right, nhosts, interactions, attrs);
+    return simulateEvents(nhosts, attrs, tree.age, repertoireLeft, [EndEvent {age = tree.left.age}], repertoireRight, [EndEvent {age = tree.right.age}], []);
+}
+
+model function hre(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, interactions: Int[][], host_distances: Real[][]): Real[] {
+    assume lambda ~ Dirichlet([1.0, 1.0, 1.0, 1.0]);  // lambda[1] = 0->1, lambda[2] = 1->0, lambda[3] = 1->2, lambda[4] = 2->1
+    assume mu ~ Exponential(10.0);
+    assume beta ~ Exponential(1.0);
+    let avgDistance = seqSumReal(sapply(host_distances, seqSumReal)) / int2real(nhosts) / (int2real(nhosts) - 1.);
+    let attrs = ModelAttrs {lambda = lambda, mu = mu, beta = beta, distances = host_distances, avgDistance = avgDistance};
+    walk(symbiont_tree, nhosts, interactions, attrs);
+    return join([lambda, [mu, beta]]);
+}

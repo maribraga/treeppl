@@ -287,7 +287,6 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
 
   // Propose a repertoire. The propose mechanism means that the simulation
   // should be "penalized" for the probability associated with the draw. 
-  let probs = getProbs(tree);  // bug workaround
   let probRecordSequence = sapply(tree.probs, createProbRecord);
   let repertoire = sapply(probRecordSequence, categorical);      // Note: assume is within function categorical
     

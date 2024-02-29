@@ -1,0 +1,56 @@
+function maxHelper(x: Real[], i: Int, max: Real) {
+    if eqi(i, 0) { return max; }
+    if x[i] > max { return maxHelper(x, subi(i, 1), x[i]); }
+    return maxHelper(x, subi(i, 1), max);
+}
+
+function max(x: Real[]) {
+    return maxHelper(x, length(x), -inf);
+}
+
+function simulateHelper(n: Int, factor: Real, rp: Tensor[Real], u: Real, r: Tensor[Real], mt: Real, start: Int, end: Int) {
+    let p = factor * mtxGet(start, end, rp);
+    if u < p {
+        return [start];
+    }
+    let n = addi(n, 1);
+    let states = simulateHelper(n, factor * mt / int2real(n), rp *@ r, u - p, r, mt, start, end);
+    let state = states[length(states)];
+    assume next ~ Categorical([
+        mtxGet(state, 1, r) * mtxGet(1, end, rp),
+        mtxGet(state, 2, r) * mtxGet(2, end, rp),
+        mtxGet(state, 3, r) * mtxGet(3, end, rp)
+    ]);
+    let next = addi(1, next);
+    if eqi(state, next) {
+        return states;
+    }
+    return join([states, [next]]);
+}
+
+// Uniformization alg. from https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2818752/pdf/nihms164944.pdf
+function simulate(t: Real, start: Int, end: Int, q: Tensor[Real]) {
+    let p = mtxExp(t $* q);
+    let m = max([-mtxGet(1, 1, q), -mtxGet(2, 2, q), -mtxGet(3, 3, q)]);
+    let r = mtxCreateId(3) +@ ((1./m) $* q);
+    assume u ~ Uniform(0., 1.);
+    return simulateHelper(0, exp(-m*t) / mtxGet(start, end, p), mtxCreateId(3), u, r, m * t, start, end);
+}
+
+model function cond_ctmc(): () {
+    assume lambda ~ Dirichlet([1.0, 1.0, 1.0, 1.0]);  // lambda[1] = 0->1, lambda[2] = 1->0, lambda[3] = 1->2, lambda[4] = 2->1
+    assume mu ~ Exponential(10.0);
+    // assume beta ~ Exponential(1.0);
+
+    let lambda = [0.25, 0.25, 0.25, 0.25];
+    let mu = 1.0;
+
+    let q = mtxCreate(3, 3, [
+        -lambda[1] * mu,                    lambda[1] * mu, 0.,
+         lambda[2] * mu,  -lambda[2] * mu - lambda[3] * mu, lambda[3] * mu,
+                      0.,                   lambda[4] * mu, -lambda[4] * mu
+    ]);
+    
+    let x = simulate(10., 1, 2, q);
+    printLn(join(sint2string(x)));
+}
