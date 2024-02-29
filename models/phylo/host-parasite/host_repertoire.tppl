@@ -467,8 +467,8 @@ function sample_exponential_max_t(rate: Real, max_t: Real) : Real {
 // Compute log PDF for a value from the truncated exponential
 // The truncation multiplies the pdf with 1/(1-u_min).
 function log_pdf_exponential_max_t(value : Real, rate: Real, max_t: Real) : Real {
-	let u_min = exp(-(rate * max_t));
-  return ( (-(rate * value * log(rate))) - log(1.0-u_min)); 
+  let u_min = exp(-(rate * max_t));
+  return ( (-(rate * value - log(rate))) - log(1.0-u_min)); 
 }
 
 // Simulate repertoire evolution from full model, one event
