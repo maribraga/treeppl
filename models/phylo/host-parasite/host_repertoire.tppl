@@ -306,7 +306,7 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
 	let history = simulate_history(start, stop, mp);
   
   // pay debt for sampling a node state
-  logWeight(log_rep_debt); // CHECK
+  logWeight(- log_rep_debt); // CHECK
   resample;
 
 	if tree is ProbsLeaf {
@@ -317,6 +317,8 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
 		let obsRecordSequence = sapply(obs_msg, createProbRecord);
 		let log_weight = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
 		// Note: categorical works here because repertoire id 0-based
+
+    //logWeight(log_weight) //CHECK
 		
 		return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
 		                   history = history, log_rep_debt = log_rep_debt - log_weight};
@@ -346,7 +348,7 @@ function simulate_history (from_rep: HistoryPoint, to_rep: HistoryPoint, mp: Mod
 	
   // Now we have both debt and weight at an alignment point 
   // Pay debt for proposed history
-  logWeight(history_weight.log_weight - proposed_unordered_events.log_debt); 
+  logWeight(history_weight.log_weight - proposed_unordered_events.log_debt);  // CHECK
   resample;
 
   // return only history since weight has already been updated
@@ -447,9 +449,7 @@ function getWaitingTime(from_state: Int, end_state: Int, rate: Real, from_age: R
 // Which state changes are possible for each state?
 function getToStates(state: Int): Int[] { 
   if (eqi(state, 0)) {return [1,2];}
-
   if (eqi(state, 1)) {return [0,2];}
-
   // if (eqi(state,2))
   return [0,1];
 }
@@ -515,9 +515,8 @@ function getNewState(i: Int, state: Int, event: Event): Int {
   // if this is the host that has changed, update state
 	if ( eqi(i, event.host) ) {
 	  return event.to_state;
-	} else {
-	  return state;
 	}
+	return state;
 }
 
 // Compute rate for a proposed event
@@ -660,43 +659,38 @@ function subAge(left: Event, right: Event): Int {
   let diff = subf(right.age, left.age);
   if (diff >= 0.0){
     return 1;
-  } else {
-			return subi(1,2);  // type error if I just write -1
-	}
+  }
+	return subi(1,2);  // type error if I just write -1
 }
 
 // How many hosts in state 2?
 function count2s(count: Int, host: Int): Int {
 	if (eqi(host, 2)) {
 		return addi(count, 1);
-	} else {
-			return count;
 	}
+	return count;
 }
 
 // How many hosts in state 1?
 function count1s(count: Int, host: Int): Int {
 	if (eqi(host, 1)) {
 		return addi(count, 1);
-	} else {
-			return count;
 	}
+	return count;
 }
 
 // Is this host in state 2? 
 function is2(x: Int): Bool {
   if (eqi(x, 2)) {
     return true;
-  } else {
-      return false;
   }
+  return false;
 }
 
 // Is this host in states 1 or 2? 
 function is1or2(x: Int): Bool {
   if (eqi(x,1) || eqi(x,2)) { 
     return true;
-  } else {
-			return false;
-	}
+  }
+	return false;
 }
