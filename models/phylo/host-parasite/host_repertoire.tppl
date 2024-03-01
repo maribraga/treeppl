@@ -142,10 +142,8 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
     repertoire = root_rep, history = [], log_rep_debt = log_root_rep_debt-log_weight_root,
     left = left, right = right};
 
-  // Factor in the net debt of the proposed ancestral repertoires 
-  // at nodes and leaves in the historyTree
-  // Mariana: I'm not sure if this should be minus
-  logWeight( -get_rep_debt(historyTree) );
+  // Factor in the net debt of the proposed root state // CHECK
+  logWeight( log_weight_root - log_root_rep_debt);
   
   // Return symbiont tree with simulated character history and parameter values
   return ReturnType{tree = historyTree, lambda = lambda, mu = mu, beta = beta};
@@ -318,7 +316,8 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
 		let log_weight = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
 		// Note: categorical works here because repertoire id 0-based
 
-    //logWeight(log_weight) //CHECK
+    // weight of the observed tip states
+    //logWeight(log_weight) // CHECK
 		
 		return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
 		                   history = history, log_rep_debt = log_rep_debt - log_weight};
