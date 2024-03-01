@@ -290,7 +290,7 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
   let probRecordSequence = sapply(tree.probs, createProbRecord);
   let repertoire = sapply(probRecordSequence, categorical);      // Note: assume is within function categorical
     
-  let log_rep_debt = seqSumReal(zipWith(categoricalLogScore, repertoire, probRecordSequence)) - tree.log_norm_factor);
+  let log_rep_debt = seqSumReal(zipWith(categoricalLogScore, repertoire, probRecordSequence)) - tree.log_norm_factor;
   // Note: categorical works here because repertoire is 0-based
   	
   // check if sampled repertoire contains at least one actual host (state 2)
@@ -316,8 +316,7 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
     let log_weight = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
     // Note: categorical works here because repertoire id 0-based
 		
-    return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
-                       history = history, log_rep_debt = log_rep_debt - log_weight};
+    return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, history = history};
   }
 
   // simulate up the tree (root -> leaf)
