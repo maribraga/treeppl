@@ -56,8 +56,8 @@ type HistoryWeight = HistoryWeight{log_weight: Real, history: HistoryPoint[]}
 
 // Tree decorated with ancestral host repertoires and branch repertoire histories
 type HistoryTree =
-  | HistoryLeaf{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[], log_rep_debt: Real}
-  | HistoryNode{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[], log_rep_debt: Real,
+  | HistoryLeaf{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[]}
+  | HistoryNode{age: Real, label: Int, repertoire: Int[], history: HistoryPoint[],
                 left: HistoryTree, right: HistoryTree}
 
 // Type used to hold the character histories and parameter values to be outputed
@@ -142,8 +142,7 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
 
   // Root node doesn't have any history (no subroot branch)
   let historyTree = HistoryNode{age = probs_tree.age, label = probs_tree.label,
-    repertoire = root_rep, history = [], log_rep_debt = log_root_rep_debt-log_weight_root,
-    left = left, right = right};
+    repertoire = root_rep, history = [], left = left, right = right};
   
   // Return symbiont tree with simulated character history and parameter values
   return ReturnType{tree = historyTree, lambda = lambda, mu = mu, beta = beta};
@@ -320,7 +319,7 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
     logWeight(log_weight); // CHECK
 		
 		return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
-		                   history = history, log_rep_debt = log_rep_debt - log_weight};
+		                   history = history};
 	}
 
   // simulate up the tree (root -> leaf)
@@ -328,7 +327,7 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
 	let right = simulate(tree.right, stop, mp, iMatrix);
 
 	return HistoryNode{age = tree.age, label = tree.label, repertoire = repertoire,
-    history = history, log_rep_debt = log_rep_debt, left = left, right = right};
+                     history = history, left = left, right = right};
 
 }
 
@@ -598,12 +597,12 @@ function gainsIf0or1 (i: Int, from_state: Int, repertoire: Int[], mp: ModelParam
 
 // Accumulate the total log debt of proposing the
 // ancestral repertoires in the tree.
-function get_rep_debt (tree: HistoryTree): Real {
-  if (tree is HistoryLeaf) {
-    return tree.log_rep_debt;
-  }
-  return tree.log_rep_debt + get_rep_debt(tree.left) + get_rep_debt(tree.right);
-}
+//function get_rep_debt (tree: HistoryTree): Real {
+//  if (tree is HistoryLeaf) {
+//    return tree.log_rep_debt;
+//  }
+//  return tree.log_rep_debt + get_rep_debt(tree.left) + get_rep_debt(tree.right);
+//}
 
 
 /*---------------- Help functions --------------------------*/
