@@ -189,7 +189,14 @@ function get_proposal_params(symbiont_tree: TreeLabeled, iMatrix: Tensor[Real], 
   let pis = rep(n, stationary_probs);
 
   // calculate final probabilites from belief propagation
-  return final_probs(msgTree, pis, qMatrix, tune);
+  let prel_tree = final_probs(msgTree, pis, qMatrix, tune);
+
+  // factor in and store normalization constant from root
+  // in final returned tree
+  let msg_factor = norm_mess(MulMessage(msgTree.out_msg,pis));
+  return ProbsNode{age = prel_tree.age, label = prel_tree.label,
+                   left = prel_tree.left, right = prel_tree.right,
+                   probs = prel_tree.probs, log_norm_factor = msg_factor.log_factor + tree.log_norm_factor};
 }
 
 // Compute postorder messages on the observed tree
@@ -217,7 +224,8 @@ function postorder_msgs(tree: TreeLabeled, iMatrix: Tensor[Real], qMatrix: Tenso
   let msg_factor = norm_mess(mulMessage(left_in_msg, right_in_msg));
 
   return MsgNode{age= tree.age, label= tree.label, left= left, right= right, 
-    left_in_msg = left_in_msg, right_in_msg = right_in_msg, out_msg = msg_factor.msg, log_norm_factor = msg_factor.log_factor};
+                 left_in_msg = left_in_msg, right_in_msg = right_in_msg,
+                 out_msg = msg_factor.msg, log_norm_factor = msg_factor.log_factor};
 }
 
 // Compute leaf message from observed interactions
@@ -256,7 +264,7 @@ function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[
 
   if tree is MsgLeaf {
     return ProbsLeaf{age= 0.0, label= tree.label, probs = msg_factor.msg, log_norm_factor = msg_factor.log_factor};
-  } 
+  }
 
   // get branch lengths
   let left_branch = tree.age - getMsgTreeAge(tree.left);
@@ -274,7 +282,9 @@ function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[
   let left  =  final_probs(tree.left,  left_parent_msg, qMatrix, tune);
   let right =  final_probs(tree.right, right_parent_msg, qMatrix, tune);
 
-  return ProbsNode{age = tree.age, label = tree.label, left = left, right = right, probs = msg_factor.msg, log_norm_factor = msg_factor.log_factor + tree.log_norm_factor};
+  return ProbsNode{age = tree.age, label = tree.label,
+                   left = left, right = right,
+                   probs = msg_factor.msg, log_norm_factor = msg_factor.log_factor + tree.log_norm_factor};
 }
 
 
@@ -315,8 +325,12 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
     let obsRecordSequence = sapply(obs_msg, createProbRecord);
     let log_weight = seqSumReal(zipWith(categoricalLogScore, repertoire, obsRecordSequence));
     // Note: categorical works here because repertoire id 0-based
-		
-    return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, history = history};
+    
+    logWeight (log_weight);
+    resample;
+
+    return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
+                       history = history};
   }
 
   // simulate up the tree (root -> leaf)
@@ -473,22 +487,22 @@ function log_pdf_exponential_max_t(value : Real, rate: Real, max_t: Real) : Real
 function simulate_by_event (repertoire: Int[], eventSeq: Event[], event_index: Int,
 	from_age: Real, end_age: Real, mp: ModelParams) : HistoryWeight {
 
-	// End case, deal with last time segment
-	if gti(event_index, length(eventSeq)) {          
-		let change_rate = total_rate(repertoire, mp);
-		return HistoryWeight{log_weight = poissonLogScore(0, 
-      PoissonParam{rate = change_rate*(from_age-end_age)}), history = []};
-	}
+  // End case, deal with last time segment
+  if gti(event_index, length(eventSeq)) {          
+    let change_rate = total_rate(repertoire, mp);
+    return HistoryWeight{log_weight = poissonLogScore(0, 
+    PoissonParam{rate = change_rate*(from_age-end_age)}), history = []};
+  }
 
-	// Typical case
-	let the_event = eventSeq[event_index];
-	let rate = getRate(repertoire, the_event.host, the_event.to_state, mp);
-	let change_rate = total_rate(repertoire, mp);
+  // Typical case
+  let the_event = eventSeq[event_index];
+  let rate = getRate(repertoire, the_event.host, the_event.to_state, mp);
+  let change_rate = total_rate(repertoire, mp);
 
-	// Note that the first statement will capture the cases where the proposed
-	// history is impossible because the repertoire we are supposed to go to
-	// doesn't have an actual host (state 2).
-	if (rate == 0.0) {
+  // Here, we capture the cases where the proposed
+  // history is impossible because the repertoire we are supposed to go to
+  // doesn't have an actual host (state 2).
+  if (rate == 0.0) {
     weight 0.0;
     resample;
   }
@@ -499,12 +513,13 @@ function simulate_by_event (repertoire: Int[], eventSeq: Event[], event_index: I
 
   // Update repertoire with the change in the_event
   let new_repertoire = sapplyi1(repertoire, getNewState, the_event);
-	let hp = HistoryPoint{age = the_event.age, repertoire = new_repertoire};
+  let hp = HistoryPoint{age = the_event.age, repertoire = new_repertoire};
+  
   // Simulate next event
-	let simHist = simulate_by_event(new_repertoire, eventSeq, addi(event_index,1), the_event.age, end_age, mp);
+  let simHist = simulate_by_event(new_repertoire, eventSeq, addi(event_index,1), the_event.age, end_age, mp);
 
   // return the whole branch with the sum of weights and full history
-	return HistoryWeight{log_weight = simHist.log_weight + log_weight, history = join([[hp], simHist.history])};
+  return HistoryWeight{log_weight = simHist.log_weight + log_weight, history = join([[hp], simHist.history])};
 }
 
 // Update host states
@@ -704,10 +719,10 @@ function get_factor(msg: Tensor[Real]): Real {
 }  
     
 // Normalise message for each host and store the log of the normalizing factors
-function norm_mess(msg: Tensor[Real][]): FactorNormMessage {
+function norm_mess(msg: Tensor[Real][]): NormMessageWithFactor {
   let factors = sapply(msg, get_factor);
 
-  let log_factor = -seqSumReal(sapply(factors, log));   
+  let log_factor = -seqSumReal(sapply(factors, log));
 
   let norm_msg = zipWith(mtxSclrMul, factors, msg);
 
