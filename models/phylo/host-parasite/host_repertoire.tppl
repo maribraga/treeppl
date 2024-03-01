@@ -133,6 +133,9 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
   // calculate -log of the number of possible root states
   let log_weight_root = - ( log( (3.0 ^ Real(nhosts)) - (2.0 ^ Real(nhosts)) ) );
 
+  // Factor in the net debt of the proposed root state // CHECK
+  logWeight( log_weight_root - log_root_rep_debt);
+
   // Simulate repertoire history on the symbiont tree (left and right daughters)
   let left = simulate(probs_tree.left, HistoryPoint{age = probs_tree.age, repertoire = root_rep}, mp, iMatrix);
   let right = simulate(probs_tree.right, HistoryPoint{age = probs_tree.age, repertoire = root_rep}, mp, iMatrix);
@@ -141,9 +144,6 @@ model function mymodel(symbiont_tree: TreeLabeled, ntips: Int, nhosts: Int, inte
   let historyTree = HistoryNode{age = probs_tree.age, label = probs_tree.label,
     repertoire = root_rep, history = [], log_rep_debt = log_root_rep_debt-log_weight_root,
     left = left, right = right};
-
-  // Factor in the net debt of the proposed root state // CHECK
-  logWeight( log_weight_root - log_root_rep_debt);
   
   // Return symbiont tree with simulated character history and parameter values
   return ReturnType{tree = historyTree, lambda = lambda, mu = mu, beta = beta};
@@ -299,13 +299,13 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
     resample;
   } 
 
-	let stop = HistoryPoint{age = getProbsTreeAge(tree), repertoire = repertoire};
-  // simulate a character history from parent (start) to current node/leaf (stop)
-	let history = simulate_history(start, stop, mp);
-  
   // pay debt for sampling a node state
   logWeight(- log_rep_debt); // CHECK
   resample;
+
+	let stop = HistoryPoint{age = getProbsTreeAge(tree), repertoire = repertoire};
+  // simulate a character history from parent (start) to current node/leaf (stop)
+	let history = simulate_history(start, stop, mp);
 
 	if tree is ProbsLeaf {
 
@@ -317,7 +317,7 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
 		// Note: categorical works here because repertoire id 0-based
 
     // weight of the observed tip states
-    //logWeight(log_weight) // CHECK
+    logWeight(log_weight); // CHECK
 		
 		return HistoryLeaf{age = tree.age, label = tree.label, repertoire = repertoire, 
 		                   history = history, log_rep_debt = log_rep_debt - log_weight};
