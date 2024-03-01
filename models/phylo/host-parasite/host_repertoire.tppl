@@ -266,9 +266,8 @@ function final_probs(tree: MsgTree, parent_msg: Tensor[Real][], qMatrix: Tensor[
   let tMatrixRight = mtxExp(mtxSclrMul(right_branch, qMatrix));
 
   // get parent message to each child
-  // TO DO: check that it is really parent_msg and not probs here
-  let left_parent_msg  = sapply1(mulMessage(parent_msg, tree.left_in_msg), mtxMul, tMatrixLeft);
-  let right_parent_msg = sapply1(mulMessage(parent_msg, tree.right_in_msg), mtxMul, tMatrixRight);
+  let left_parent_msg  = sapply1(mulMessage(parent_msg, tree.right_in_msg), mtxMul, tMatrixLeft);
+  let right_parent_msg = sapply1(mulMessage(parent_msg, tree.left_in_msg), mtxMul, tMatrixRight);
 
   // continue up the tree (root -> leafs)
   let left  =  final_probs(tree.left,  left_parent_msg, qMatrix, tune);
@@ -306,6 +305,10 @@ function simulate (tree: ProbsTree, start: HistoryPoint, mp: ModelParams, iMatri
   // simulate a character history from parent (start) to current node/leaf (stop)
 	let history = simulate_history(start, stop, mp);
   
+  // pay debt for sampling a node state
+  logWeight(log_rep_debt); // CHECK
+  resample;
+
 	if tree is ProbsLeaf {
 
     // calculate weight of proposed repertoire given observation messages
@@ -342,7 +345,9 @@ function simulate_history (from_rep: HistoryPoint, to_rep: HistoryPoint, mp: Mod
   let history_weight = simulate_by_event(from_rep.repertoire, eventSeq, 1, from_rep.age, to_rep.age, mp);
 	
   // Now we have both debt and weight at an alignment point 
+  // Pay debt for proposed history
   logWeight(history_weight.log_weight - proposed_unordered_events.log_debt); 
+  resample;
 
   // return only history since weight has already been updated
   return history_weight.history;
