@@ -7,14 +7,14 @@
       "left": {
           "__constructor__": "Leaf",
           "__data__": {
-            "label": 4,
+            "label": 1,
             "age": 0.0
           }
       },
       "right": {
         "__constructor__":"Leaf",
         "__data__": {
-          "label":3,
+          "label":2,
           "age":0.0
         }
       }
@@ -23,7 +23,7 @@
   "ntips":2,
   "nhosts":3,
   "interactions":[2,2,0,
-  				        0,0,2],
+  				  0,0,2],
   "host_distances":[0.0000000, 0.2563668, 3.15567,
                     0.2563668, 0.0000000, 3.15567,
                     3.1556704, 3.1556704, 0.00000],
